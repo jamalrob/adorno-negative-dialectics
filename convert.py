@@ -449,6 +449,7 @@ p {
   padding: 2rem 0;
   border-bottom: 1px solid var(--toc-border);
 }
+#title-block p { text-align: center; }
 #title-block h1 {
   font-size: 2.4rem;
   color: var(--heading-color);
