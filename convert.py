@@ -303,7 +303,7 @@ CSS = """\
 
 /* Dark theme — applied by JS toggle or system preference */
 [data-theme="dark"] {
-  --bg: #1a1814;
+  --bg: #272420;
   --text: #e8e4dc;
   --muted: #777;
   --accent: #c49a6c;
@@ -316,7 +316,7 @@ CSS = """\
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #1a1814;
+    --bg: #272420;
     --text: #e8e4dc;
     --muted: #777;
     --accent: #c49a6c;
@@ -345,6 +345,27 @@ CSS = """\
   transition: border-color 0.15s, color 0.15s;
 }
 #theme-toggle:hover { border-color: var(--link); color: var(--text); }
+#mono-toggle {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+  padding: 0.3rem 0.5rem;
+  background: none;
+  border: 1px solid var(--toc-border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: system-ui, sans-serif;
+  font-size: 0.72rem;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, color 0.15s;
+}
+#mono-toggle:hover { border-color: var(--link); color: var(--text); }
+#mono-toggle.active { border-color: var(--link); color: var(--text); }
+
+[data-mono="true"] #content {
+  font-family: 'Courier Prime', 'Courier New', monospace;
+}
 
 html { font-size: 20px; scroll-behavior: smooth; }
 
@@ -626,6 +647,9 @@ def build_html(nodes) -> str:
   <meta property="og:type" content="book">
   <meta property="og:url" content="https://negativedialectics.org">
   <meta name="author" content="Theodor W. Adorno">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital@0;1&display=swap" rel="stylesheet">
   <style>
 {CSS}
   </style>
@@ -640,6 +664,7 @@ def build_html(nodes) -> str:
 <nav id="toc" aria-label="Table of contents">
   <h2>Contents</h2>
   <button id="theme-toggle" aria-label="Toggle light/dark mode">☀ Light</button>
+  <button id="mono-toggle" aria-label="Toggle monospace font">Aa Monospace</button>
 {toc_html}
   <a id="source-link" href="https://github.com/jamalrob/adorno-negative-dialectics">Source on GitHub</a>
   <a id="author-link" href="https://blog.alistairrobinson.me/">Built by J. Alistair Robinson</a>
@@ -674,6 +699,20 @@ def build_html(nodes) -> str:
   }} catch(e) {{ applyTheme(false); }}
 
   btn.addEventListener('click', function () {{ applyTheme(!isDark()); }});
+
+  // ── Mono toggle ──
+  var monoBtn = document.getElementById('mono-toggle');
+  function applyMono(mono) {{
+    root.dataset.mono = mono ? 'true' : 'false';
+    monoBtn.classList.toggle('active', mono);
+    try {{ localStorage.setItem('nd-mono', mono ? 'true' : 'false'); }} catch(e) {{}}
+  }}
+  try {{
+    applyMono(localStorage.getItem('nd-mono') === 'true');
+  }} catch(e) {{ applyMono(false); }}
+  monoBtn.addEventListener('click', function () {{
+    applyMono(root.dataset.mono !== 'true');
+  }});
 
   // ── Mobile TOC toggle ──
   var tocToggle = document.getElementById('toc-toggle');
