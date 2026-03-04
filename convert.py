@@ -476,6 +476,15 @@ p {
   font-family: system-ui, sans-serif;
 }
 #source-link:hover { color: var(--text); }
+#author-link {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-decoration: none;
+  font-family: system-ui, sans-serif;
+}
+#author-link:hover { color: var(--text); }
 
 /* ── Mobile ── */
 #toc-toggle {
@@ -636,6 +645,7 @@ def build_html(nodes) -> str:
   <button id="theme-toggle" aria-label="Toggle light/dark mode">☀ Light</button>
 {toc_html}
   <a id="source-link" href="https://github.com/jamalrob/adorno-negative-dialectics">Source on GitHub</a>
+  <a id="author-link" href="https://www.thephilosophyforum.com">J. Alistair Robinson</a>
 </nav>
 </div>
 
