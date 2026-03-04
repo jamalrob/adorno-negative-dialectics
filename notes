@@ -1,0 +1,5 @@
+## Re-convert:
+python3 content/convert.py
+
+## Deploy:
+bash scripts/deploy.sh
