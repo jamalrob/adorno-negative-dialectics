@@ -485,6 +485,15 @@ p {
   font-family: system-ui, sans-serif;
 }
 #author-link:hover { color: var(--text); }
+#forum-link {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-family: system-ui, sans-serif;
+}
+#forum-link a { color: var(--muted); text-decoration: none; }
+#forum-link a:hover { color: var(--text); }
 
 /* ── Mobile ── */
 #toc-toggle {
@@ -645,7 +654,8 @@ def build_html(nodes) -> str:
   <button id="theme-toggle" aria-label="Toggle light/dark mode">☀ Light</button>
 {toc_html}
   <a id="source-link" href="https://github.com/jamalrob/adorno-negative-dialectics">Source on GitHub</a>
-  <a id="author-link" href="https://www.thephilosophyforum.com">J. Alistair Robinson</a>
+  <a id="author-link" href="https://blog.alistairrobinson.me/">J. Alistair Robinson</a>
+  <span id="forum-link">Built for <a href="https://www.thephilosophyforum.com">The Philosophy Forum</a></span>
 </nav>
 </div>
 
