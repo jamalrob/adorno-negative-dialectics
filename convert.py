@@ -466,6 +466,17 @@ p {
   font-family: system-ui, sans-serif;
 }
 
+/* ── GitHub source link ── */
+#source-link {
+  display: block;
+  margin-top: 2rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-decoration: none;
+  font-family: system-ui, sans-serif;
+}
+#source-link:hover { color: var(--text); }
+
 /* ── Mobile ── */
 #toc-toggle {
   display: none;
@@ -624,6 +635,7 @@ def build_html(nodes) -> str:
   <h2>Contents</h2>
   <button id="theme-toggle" aria-label="Toggle light/dark mode">☀ Light</button>
 {toc_html}
+  <a id="source-link" href="https://github.com/jamalrob/adorno-negative-dialectics">Source on GitHub</a>
 </nav>
 </div>
 
