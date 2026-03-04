@@ -48,3 +48,4 @@ python3 convert.py
 - *Negative Dialectics* © 1970 Theodor W. Adorno / Suhrkamp Verlag Frankfurt am Main
 - English translation by [Dennis Redmond](mailto:metalslorg@gmail.com) (2001),
   made freely available for educational, non-commercial purposes
+- PDF edition prepared by [/u/ProbablyNotDave](https://www.reddit.com/r/CriticalTheory/comments/clhpah/a_while_ago_i_asked_rcriticaltheory_if_youd_be/)
