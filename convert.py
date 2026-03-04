@@ -364,7 +364,7 @@ CSS = """\
 #mono-toggle.active { border-color: var(--link); color: var(--text); }
 
 [data-mono="true"] #content {
-  font-family: 'Courier Prime', 'Courier New', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 html { font-size: 20px; scroll-behavior: smooth; }
@@ -649,7 +649,7 @@ def build_html(nodes) -> str:
   <meta name="author" content="Theodor W. Adorno">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital@0;1&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital@0;1&display=swap" rel="stylesheet">
   <style>
 {CSS}
   </style>
