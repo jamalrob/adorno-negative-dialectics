@@ -590,6 +590,7 @@ def typographic(text: str) -> str:
 def build_toc(headings: list[tuple]) -> str:
     """Build the sidebar table of contents from (level, text, anchor) triples."""
     lines = ["<ul>"]
+    lines.append('  <li class="toc-h1"><a href="#title-block">Negative Dialectics</a></li>')
     for level, text, anchor in headings:
         cls = f"toc-h{level}"
         label = escape(typographic(text))
