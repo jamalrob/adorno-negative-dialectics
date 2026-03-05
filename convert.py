@@ -195,9 +195,10 @@ def parse(raw: str):
                 j += 1
             if j < len(lines):
                 leading = len(lines[j]) - len(lines[j].lstrip())
-                if leading >= 1:
-                    cleaned.append("")   # new paragraph or heading follows
-                # else: 0 leading spaces → continuation, no blank needed
+                next_s = lines[j].strip()
+                if leading >= 1 or is_all_caps_heading(next_s) or next_s in ALL_KNOWN:
+                    cleaned.append("")   # new paragraph, heading, or known section follows
+                # else: 0 leading spaces, plain text → continuation, no blank needed
             else:
                 cleaned.append("")  # end of document, add blank for safety
             i += 1
