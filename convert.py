@@ -475,6 +475,10 @@ h3.section-heading {
 }
 
 span.discussion-links {
+  display: none;
+}
+[data-discussion="true"] span.discussion-links {
+  display: inline;
   font-size: 0.7rem;
   font-weight: 400;
   letter-spacing: 0;
@@ -483,11 +487,26 @@ span.discussion-links {
   opacity: 0.45;
   vertical-align: middle;
 }
-span.discussion-links:hover { opacity: 1; }
-a.discussion-link {
-  text-decoration: none;
-}
+[data-discussion="true"] span.discussion-links:hover { opacity: 1; }
+a.discussion-link { text-decoration: none; }
 a.discussion-link:hover { text-decoration: underline; }
+#discussion-toggle {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+  padding: 0.3rem 0.5rem;
+  background: none;
+  border: 1px solid var(--toc-border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: system-ui, sans-serif;
+  font-size: 0.72rem;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, color 0.15s;
+}
+#discussion-toggle:hover { border-color: var(--link); color: var(--text); }
+#discussion-toggle.active { border-color: var(--link); color: var(--text); }
 
 p {
   margin-bottom: 1rem;
@@ -726,6 +745,7 @@ def build_html(nodes) -> str:
   <h2>Contents</h2>
   <button id="theme-toggle" aria-label="Toggle light/dark mode">☀ Light</button>
   <button id="mono-toggle" aria-label="Toggle monospace font">Aa Monospace</button>
+  <button id="discussion-toggle" aria-label="Toggle reading group links">Show TPF links</button>
 {toc_html}
   <a id="source-link" href="https://github.com/jamalrob/adorno-negative-dialectics">Source on GitHub</a>
   <a id="author-link" href="https://blog.alistairrobinson.me/">Built by J. Alistair Robinson</a>
@@ -773,6 +793,20 @@ def build_html(nodes) -> str:
   }} catch(e) {{ applyMono(false); }}
   monoBtn.addEventListener('click', function () {{
     applyMono(root.dataset.mono !== 'true');
+  }});
+
+  // ── Discussion links toggle ──
+  var discBtn = document.getElementById('discussion-toggle');
+  function applyDiscussion(on) {{
+    root.dataset.discussion = on ? 'true' : 'false';
+    discBtn.classList.toggle('active', on);
+    try {{ localStorage.setItem('nd-discussion', on ? 'true' : 'false'); }} catch(e) {{}}
+  }}
+  try {{
+    applyDiscussion(localStorage.getItem('nd-discussion') === 'true');
+  }} catch(e) {{ applyDiscussion(false); }}
+  discBtn.addEventListener('click', function () {{
+    applyDiscussion(root.dataset.discussion !== 'true');
   }});
 
   // ── Mobile TOC toggle ──
