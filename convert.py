@@ -64,6 +64,19 @@ ALL_KNOWN = {**KNOWN_H1, **KNOWN_H2, **KNOWN_ENDNOTE_H3}
 # Lines that look like ALL CAPS headings but are actually signatures/attributions
 KNOWN_NOT_HEADINGS = {"THEODOR W. ADORNO"}
 
+# ── Discussion links ───────────────────────────────────────────────────────────
+# Loaded from discussion_links.yaml. Edit that file to add new entries.
+# Format: section-anchor-id: [[Username, url], ...]
+# Multiple posts by the same user are automatically numbered: Username (1), (2)…
+
+import yaml as _yaml
+
+_links_path = Path(__file__).parent / "discussion_links.yaml"
+DISCUSSION_LINKS = {
+    k: [tuple(pair) for pair in v]
+    for k, v in _yaml.safe_load(_links_path.read_text()).items()
+}
+
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 
@@ -461,6 +474,21 @@ h3.section-heading {
   margin: 2.5rem 0 0.8rem;
 }
 
+span.discussion-links {
+  font-size: 0.7rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  margin-left: 0.6em;
+  opacity: 0.45;
+  vertical-align: middle;
+}
+span.discussion-links:hover { opacity: 1; }
+a.discussion-link {
+  text-decoration: none;
+}
+a.discussion-link:hover { text-decoration: underline; }
+
 p {
   margin-bottom: 1rem;
   text-align: justify;
@@ -630,9 +658,34 @@ def build_html(nodes) -> str:
             level = int(kind[1])
             uid = unique_anchor(anchor)
             toc_headings.append((level, text, uid))
+            posts = DISCUSSION_LINKS.get(uid, [])
+            if posts:
+                seen: dict[str, int] = {}
+                parts = []
+                for username, url in posts:
+                    seen[username] = seen.get(username, 0) + 1
+                counts = {u: 0 for u in seen}
+                for username, url in posts:
+                    counts[username] += 1
+                    label = (
+                        f"{username} ({counts[username]})"
+                        if seen[username] > 1 else username
+                    )
+                    parts.append(
+                        f'<a href="{url}" class="discussion-link"'
+                        f' title="Discussion at TPF" target="_blank"'
+                        f' rel="noopener">{label}</a>'
+                    )
+                disc_html = (
+                    ' <span class="discussion-links">'
+                    + ' | '.join(parts)
+                    + '</span>'
+                )
+            else:
+                disc_html = ""
             body_parts.append(
                 f'\n<h{level} id="{uid}" class="section-heading">'
-                f"{escape(typographic(text))}</h{level}>\n"
+                f"{escape(typographic(text))}{disc_html}</h{level}>\n"
             )
         elif kind == "p":
             if not past_title and len(text) < 80:
