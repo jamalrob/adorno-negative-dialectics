@@ -3,3 +3,7 @@ python3 content/convert.py
 
 ## Deploy:
 bash scripts/deploy.sh
+
+## Deploy with hypothesis annotations script
+Edit convert.py:
+HYPOTHESIS = False  # Set to True to include the Hypothesis annotation embed

@@ -1,3 +1,0 @@
-# Affirmative Character
-
-Hello there
