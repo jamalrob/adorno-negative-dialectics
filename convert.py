@@ -657,6 +657,7 @@ def build_html(nodes) -> str:
   <style>
 {CSS}
   </style>
+  <script src="https://hypothes.is/embed.js" async></script>
 </head>
 <body>
 
