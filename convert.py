@@ -488,7 +488,7 @@ span.discussion-links {
   vertical-align: middle;
 }
 [data-discussion="true"] span.discussion-links:hover { opacity: 1; }
-a.discussion-link { text-decoration: none; }
+a.discussion-link { text-decoration: none; color: var(--link); }
 a.discussion-link:hover { text-decoration: underline; }
 #discussion-toggle {
   display: block;
