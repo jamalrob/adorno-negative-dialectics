@@ -17,6 +17,10 @@ PDF_PATH = (
 )
 OUT_PATH = Path(__file__).parent / "negative-dialectics.html"
 
+# ── Feature flags ──────────────────────────────────────────────────────────────
+
+HYPOTHESIS = False  # Set to True to include the Hypothesis annotation embed
+
 # ── Heading registries ────────────────────────────────────────────────────────
 
 KNOWN_H1 = {
@@ -657,8 +661,7 @@ def build_html(nodes) -> str:
   <style>
 {CSS}
   </style>
-  <script src="https://hypothes.is/embed.js" async></script>
-</head>
+{('  <script src="https://hypothes.is/embed.js" async></script>' + chr(10)) if HYPOTHESIS else ""}</head>
 <body>
 
 <div id="mobile-nav">
