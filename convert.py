@@ -745,7 +745,7 @@ def build_html(nodes) -> str:
   <h2>Contents</h2>
   <button id="theme-toggle" aria-label="Toggle light/dark mode">☀ Light</button>
   <button id="mono-toggle" aria-label="Toggle monospace font">Aa Monospace</button>
-  <button id="discussion-toggle" aria-label="Toggle reading group links">Show TPF links</button>
+  <button id="discussion-toggle" aria-label="Toggle reading group links" title="Show links to reading group posts at The Philosophy Forum">Show TPF links</button>
 {toc_html}
   <a id="source-link" href="https://github.com/jamalrob/adorno-negative-dialectics">Source on GitHub</a>
   <a id="author-link" href="https://blog.alistairrobinson.me/">Built by J. Alistair Robinson</a>
