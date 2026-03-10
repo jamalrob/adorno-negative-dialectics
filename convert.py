@@ -61,6 +61,18 @@ KNOWN_H2 = {
 
 ALL_KNOWN = {**KNOWN_H1, **KNOWN_H2, **KNOWN_ENDNOTE_H3}
 
+# Maps body section anchor IDs → endnote section anchor IDs.
+# Consumed by both the JS generator and any future Python tooling.
+SECTION_TO_ENDNOTE = {
+    "introduction":                     "endnote-introduction",
+    "the-ontological-need":             "endnote-part-i-i",
+    "being-and-existence":              "endnote-part-i-ii",
+    "part-ii":                          "endnote-part-ii",
+    "freedom":                          "endnote-part-iii-i",
+    "world-spirit-and-natural-history": "endnote-part-iii-ii",
+    "meditations-on-metaphysics":       "endnote-part-iii-iii",
+}
+
 # Lines that look like ALL CAPS headings but are actually signatures/attributions
 KNOWN_NOT_HEADINGS = {"THEODOR W. ADORNO"}
 
@@ -87,9 +99,105 @@ def slugify(text: str) -> str:
     return re.sub(r"-{2,}", "-", s)
 
 
+FOOTNOTE_MARKER = "\x01"      # New asterisk footnote (line starts with *)
+FOOTNOTE_CONT_MARKER = "\x02"  # Continuation of previous page's footnote
+
+
 def is_page_number(s: str) -> bool:
     """True for standalone page numbers (arabic or roman, ≤ 5 chars)."""
     return bool(re.match(r"^[ivxlcdm\d]{1,5}$", s, re.IGNORECASE)) and len(s) <= 5
+
+
+def ends_cleanly_unicode(line: str) -> bool:
+    """True if line ends with terminal punctuation, including Unicode quotes."""
+    s = line.rstrip()
+    return s.endswith(('.', ')', ']', '"', "'", '\u201d', '\u2019', '!', '?'))
+
+
+def _is_separator(s: str) -> bool:
+    return bool(re.search(r'\.{5,}', s) or re.match(r'^[_\-]{3,}$', s))
+
+
+def preprocess_footnotes(raw_text: str) -> str:
+    """Mark in-page asterisk footnote lines with FOOTNOTE_MARKER, page by page.
+
+    Handles:
+    - New footnotes: lines starting with * at the bottom of a page
+    - Multi-page continuations: the last paragraph block on a continuation page
+    """
+    pages = raw_text.split('\x0c')
+    result_pages = []
+    footnote_continues = False
+
+    for page in pages:
+        lines = page.split('\n')
+
+        # Find page number line (search from end)
+        pageno_idx = None
+        for j in range(len(lines) - 1, -1, -1):
+            if is_page_number(lines[j].strip()):
+                pageno_idx = j
+                break
+
+        content = lines[:pageno_idx] if pageno_idx is not None else lines
+        suffix = lines[pageno_idx:] if pageno_idx is not None else []
+
+        # Find first line starting with * (new footnote)
+        ast_idx = None
+        for j, l in enumerate(content):
+            if l.startswith('*'):
+                ast_idx = j
+                break
+
+        if ast_idx is not None:
+            # New footnote starts here: mark from * to end of content
+            body_lines = content[:ast_idx]
+            fn_lines = content[ast_idx:]
+            new_content = body_lines + [FOOTNOTE_MARKER + l for l in fn_lines]
+
+            # Check if footnote continues to next page
+            last_fn = next(
+                (l for l in reversed(fn_lines)
+                 if l.strip() and not _is_separator(l.strip())),
+                ''
+            )
+            footnote_continues = not ends_cleanly_unicode(last_fn.rstrip())
+
+        elif footnote_continues:
+            # Continuation page: the last paragraph block before the page number
+            # is the footnote continuation.
+            last_blank = None
+            for j in range(len(content) - 1, -1, -1):
+                if not content[j].strip():
+                    last_blank = j
+                    break
+
+            if last_blank is not None:
+                fn_candidate = content[last_blank + 1:]
+                fn_content = [
+                    l for l in fn_candidate
+                    if l.strip() and not _is_separator(l.strip())
+                ]
+                if fn_content:
+                    new_content = (
+                        content[:last_blank + 1]
+                        + [FOOTNOTE_CONT_MARKER + l for l in fn_candidate]
+                    )
+                    last_fn = fn_content[-1]
+                    footnote_continues = not ends_cleanly_unicode(last_fn.rstrip())
+                else:
+                    new_content = content
+                    footnote_continues = False
+            else:
+                new_content = content
+                footnote_continues = False
+        else:
+            new_content = content
+            footnote_continues = False
+
+        result_pages.append('\n'.join(new_content + suffix))
+
+    return '\x0c'.join(result_pages)
 
 
 def strip_decorative(s: str) -> str:
@@ -189,7 +297,7 @@ def merge_split_headings(lines: list[str]) -> list[str]:
 def parse(raw: str):
     """Yield (kind, text, anchor) tuples from the raw pdftotext output.
 
-    kind ∈ {'h1', 'h2', 'h3', 'p', 'page'}
+    kind ∈ {'h1', 'h2', 'h3', 'p', 'footnote', 'page'}
     """
     lines = [line.replace("\x0c", "").rstrip() for line in raw.split("\n")]
 
@@ -227,12 +335,22 @@ def parse(raw: str):
     lines = merge_split_headings(lines)
 
     para: list[str] = []
+    fn_para: list[str] = []
+    in_footnote = False
+    fn_is_cont = False  # True if current footnote block is a page continuation
 
     def flush():
         nonlocal para
         if para:
             yield ("p", " ".join(para), None)
             para = []
+
+    def flush_fn():
+        nonlocal fn_para, fn_is_cont
+        if fn_para:
+            kind = "footnote_cont" if fn_is_cont else "footnote"
+            yield (kind, " ".join(fn_para), None)
+            fn_para = []
 
     # Suppress everything before the first real h1 heading (title page + TOC)
     preamble = True
@@ -242,17 +360,64 @@ def parse(raw: str):
     for line in lines:
         if done:
             break
-        s = line.strip()
+
+        # Check for footnote markers BEFORE stripping (\x01 and \x02 are not whitespace)
+        is_fn_line = line.startswith(FOOTNOTE_MARKER)
+        is_fn_cont_line = line.startswith(FOOTNOTE_CONT_MARKER)
+        if is_fn_line:
+            s = line[len(FOOTNOTE_MARKER):].strip()
+        elif is_fn_cont_line:
+            s = line[len(FOOTNOTE_CONT_MARKER):].strip()
+        else:
+            s = line.strip()
 
         # ── blanks ──
         if not s:
-            yield from flush()
+            if in_footnote and (is_fn_line or is_fn_cont_line):
+                # Blank line within footnote section — PDF layout artifact, skip it
+                continue
+            if in_footnote:
+                yield from flush_fn()
+                in_footnote = False
+            else:
+                yield from flush()
             continue
 
         # ── skip TOC dot-leader lines and footnote separators ──
         if re.search(r"\.{5,}", s) or re.match(r"^[_\-]{3,}$", s):
             continue
 
+        # ── new footnote lines (start with *) ──
+        if is_fn_line:
+            if preamble:
+                continue
+            if not in_footnote:
+                yield from flush()
+                in_footnote = True
+                fn_is_cont = False
+            # Strip the leading * and whitespace from the first line
+            text = s.lstrip("* ") if s.startswith("*") else s
+            if text:
+                fn_para.append(text)
+            continue
+
+        # ── footnote continuation lines (from next page's bottom) ──
+        if is_fn_cont_line:
+            if preamble:
+                continue
+            if not in_footnote:
+                yield from flush()
+                in_footnote = True
+                fn_is_cont = True
+            if s:
+                fn_para.append(s)
+            continue
+
+        # ── switching back to body from footnote ──
+        if in_footnote:
+            yield from flush_fn()
+            in_footnote = False
+            fn_is_cont = False
 
         # ── known h1 ──
         if s == "Index":
@@ -299,6 +464,8 @@ def parse(raw: str):
         para.append(s)
 
     yield from flush()
+    if in_footnote:
+        yield from flush_fn()
 
 
 # ── HTML generation ───────────────────────────────────────────────────────────
@@ -321,28 +488,28 @@ CSS = """\
 
 /* Dark theme — applied by JS toggle or system preference */
 [data-theme="dark"] {
-  --bg: #272420;
-  --text: #e8e4dc;
-  --muted: #777;
-  --accent: #c49a6c;
-  --toc-bg: #211f1b;
-  --toc-border: #3a3630;
-  --page-marker: #555;
-  --heading-color: #d4b896;
-  --link: #c49a6c;
+  --bg: #1e2025;
+  --text: #d6d8de;
+  --muted: #6b7080;
+  --accent: #7a90b8;
+  --toc-bg: #18191e;
+  --toc-border: #2c3040;
+  --page-marker: #4a4d56;
+  --heading-color: #a4aec4;
+  --link: #7a90b8;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #272420;
-    --text: #e8e4dc;
-    --muted: #777;
-    --accent: #c49a6c;
-    --toc-bg: #211f1b;
-    --toc-border: #3a3630;
-    --page-marker: #555;
-    --heading-color: #d4b896;
-    --link: #c49a6c;
+    --bg: #1e2025;
+    --text: #d6d8de;
+    --muted: #6b7080;
+    --accent: #7a90b8;
+    --toc-bg: #18191e;
+    --toc-border: #2c3040;
+    --page-marker: #4a4d56;
+    --heading-color: #a4aec4;
+    --link: #7a90b8;
   }
 }
 
@@ -382,7 +549,7 @@ CSS = """\
 #mono-toggle.active { border-color: var(--link); color: var(--text); }
 
 [data-mono="true"] #content {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, 'Courier New', monospace;
 }
 
 html { font-size: 20px; scroll-behavior: smooth; }
@@ -432,6 +599,42 @@ body {
 }
 
 #toc a:hover { background: var(--toc-border); }
+#toc a.active { background: var(--toc-border); color: var(--text); font-weight: 600; }
+
+#toc::-webkit-scrollbar { width: 5px; }
+#toc::-webkit-scrollbar-track { background: var(--toc-bg); }
+#toc::-webkit-scrollbar-thumb { background: var(--toc-border); border-radius: 2px; }
+
+.section-heading .permalink {
+  opacity: 0.5;
+  text-decoration: none;
+  font-size: 1em;
+  color: var(--muted);
+  margin-left: 0.5em;
+  font-weight: 400;
+  letter-spacing: 0;
+  transition: opacity 0.15s;
+  padding: 0 0.2em;
+}
+.section-heading .permalink:hover { opacity: 1; }
+
+#copy-pill {
+  position: fixed;
+  bottom: 1.5rem;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: var(--bg);
+  font-family: system-ui, sans-serif;
+  font-size: 0.75rem;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 2000;
+  white-space: nowrap;
+}
+#copy-pill.show { opacity: 1; }
 
 /* Indent levels */
 .toc-h1 { font-weight: 600; margin-top: 0.6rem; font-size: 0.78rem; }
@@ -514,6 +717,26 @@ p {
   hyphens: auto;
 }
 
+/* ── In-page asterisk footnotes ── */
+.inline-footnote {
+  margin: 0.4rem 0 1rem 0;
+  padding: 0.4rem 0.8rem;
+  border-left: 2px solid var(--toc-border);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.inline-footnote p {
+  margin-bottom: 0.3rem;
+  text-align: left;
+  hyphens: auto;
+}
+.inline-footnote p:first-child::before {
+  content: "* ";
+  font-weight: 700;
+}
+.inline-footnote p:last-child { margin-bottom: 0; }
+
 
 /* ── Title block ── */
 #title-block {
@@ -554,6 +777,30 @@ p {
   margin-top: 0.2rem;
   font-size: 0.68rem;
   font-family: system-ui, sans-serif;
+}
+
+/* ── Inline endnotes ── */
+sup.endref {
+  cursor: pointer;
+  color: var(--link);
+  font-size: 0.65em;
+}
+sup.endref:hover { text-decoration: underline; }
+#endnote-popover {
+  position: fixed;
+  display: none;
+  max-width: 320px;
+  padding: 0.6rem 0.8rem;
+  background: var(--toc-bg);
+  border: 1px solid var(--toc-border);
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: var(--text);
+  z-index: 1000;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  pointer-events: none;
 }
 
 /* ── Mobile ── */
@@ -652,8 +899,102 @@ def build_toc(headings: list[tuple]) -> str:
     return "\n".join(lines)
 
 
+def _consolidate_footnotes(nodes: list) -> list:
+    """Consolidate footnote nodes and reposition them after their anchor paragraphs.
+
+    Rules:
+    - 'footnote' nodes (new, starts with *) anchor to the most recent body
+      paragraph containing '*' (the inline marker), falling back to the last
+      body node if none is found.
+    - 'footnote_cont' nodes always join the most recently opened footnote group.
+    - Consecutive footnote/footnote_cont nodes (no body node between them) are
+      paragraph breaks within the same footnote, merged into a single aside.
+    - The complete footnote aside is inserted immediately after the anchor node.
+    """
+    body_nodes = []    # non-footnote nodes, in order
+    groups = []        # {'insert_after': int, 'paras': [str]}
+    current = None
+    last_was_fn = False
+
+    def _find_anchor() -> int:
+        """Return index of the most recent body paragraph containing '*'."""
+        for i in range(len(body_nodes) - 1, -1, -1):
+            bk, bt, _ = body_nodes[i]
+            if bk == "p" and "*" in bt:
+                return i
+        return len(body_nodes) - 1
+
+    for kind, text, anchor in nodes:
+        if kind in ("footnote", "footnote_cont"):
+            if kind == "footnote" and not last_was_fn:
+                # New footnote group anchored to the paragraph with the * marker
+                if current is not None:
+                    groups.append(current)
+                current = {"insert_after": _find_anchor(), "paras": [text]}
+            elif current is not None:
+                # Same group: either consecutive footnote paragraphs (blank line
+                # within footnote) or a continuation from the next page.
+                current["paras"].append(text)
+            else:
+                # Orphan continuation with no prior group — start a new one
+                current = {"insert_after": len(body_nodes) - 1, "paras": [text]}
+            last_was_fn = True
+        else:
+            last_was_fn = False
+            body_nodes.append((kind, text, anchor))
+
+    if current is not None:
+        groups.append(current)
+
+    # If the anchor paragraph ends mid-sentence (page-break split), defer the
+    # footnote to the next cleanly-ending paragraph so it doesn't interrupt a sentence.
+    for group in groups:
+        i = group["insert_after"]
+        while i < len(body_nodes) - 1:
+            bk, bt, _ = body_nodes[i]
+            if bk == "p" and not ends_cleanly_unicode(bt):
+                i += 1
+            else:
+                break
+        group["insert_after"] = i
+
+    # Insert footnote asides into body_nodes from last to first to preserve indices
+    result = list(body_nodes)
+    for group in sorted(groups, key=lambda g: g["insert_after"], reverse=True):
+        pos = group["insert_after"] + 1
+        result.insert(pos, ("footnote_block", group["paras"], None))
+
+    return result
+
+
+def _merge_split_paragraphs(nodes: list) -> list:
+    """Merge consecutive p nodes where the first ends mid-sentence (page-break artifact).
+    Also merges split paragraphs within footnote_block nodes."""
+    result = []
+    for node in nodes:
+        kind, text, anchor = node
+        if kind == "footnote_block":
+            merged = []
+            for para in text:
+                if merged and not ends_cleanly_unicode(merged[-1]):
+                    merged[-1] = merged[-1] + " " + para
+                else:
+                    merged.append(para)
+            result.append(("footnote_block", merged, anchor))
+        elif (result and result[-1][0] == "p" and kind == "p"
+                and not ends_cleanly_unicode(result[-1][1])):
+            pk, pt, pa = result.pop()
+            result.append(("p", pt + " " + text, pa))
+        else:
+            result.append(node)
+    return result
+
+
 def build_html(nodes) -> str:
     """Render the parsed node stream to HTML."""
+    nodes = _consolidate_footnotes(list(nodes))
+    nodes = _merge_split_paragraphs(nodes)
+
     toc_headings = []  # (level, text, anchor)
     body_parts = []
     used_anchors: dict[str, int] = {}
@@ -672,6 +1013,10 @@ def build_html(nodes) -> str:
     for kind, text, anchor in nodes:
         if kind == "page":
             pass
+        elif kind == "footnote_block":
+            # text is a list of paragraph strings
+            ps = "\n".join(f"<p>{escape(p, quote=False)}</p>" for p in text)
+            body_parts.append(f'<aside class="inline-footnote">\n{ps}\n</aside>\n')
         elif kind in ("h1", "h2", "h3"):
             past_title = True
             level = int(kind[1])
@@ -702,18 +1047,27 @@ def build_html(nodes) -> str:
                 )
             else:
                 disc_html = ""
+            permalink = f'<a href="#{uid}" class="permalink" title="Copy link" aria-label="Copy link to this section">§</a>'
             body_parts.append(
                 f'\n<h{level} id="{uid}" class="section-heading">'
-                f"{escape(typographic(text))}{disc_html}</h{level}>\n"
+                f"{escape(typographic(text))}{permalink}{disc_html}</h{level}>\n"
             )
         elif kind == "p":
             if not past_title and len(text) < 80:
                 # Still in title/front matter noise — skip very short fragments
                 # but don't skip paragraphs that are clearly content
                 pass
-            body_parts.append(f"<p>{escape(text)}</p>\n")
+            # Convert inline asterisk footnote markers to superscripts
+            text_html = re.sub(r'\*', '<sup>*</sup>', escape(text, quote=False))
+            body_parts.append(f"<p>{text_html}</p>\n")
 
     toc_html = build_toc(toc_headings)
+
+    section_to_endnote_js = (
+        "{\n"
+        + "".join(f"    '{k}': '{v}',\n" for k, v in SECTION_TO_ENDNOTE.items())
+        + "  }"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -726,10 +1080,12 @@ def build_html(nodes) -> str:
   <meta property="og:description" content="Adorno's Negative Dialectics in Dennis Redmond's 2001 English translation, with navigation anchors for every section and subsection.">
   <meta property="og:type" content="book">
   <meta property="og:url" content="https://negativedialectics.org">
+  <link rel="canonical" href="https://negativedialectics.org">
+  <link rel="icon" href="favicon.ico">
   <meta name="author" content="Theodor W. Adorno">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital@0;1&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
   <style>
 {CSS}
   </style>
@@ -828,6 +1184,184 @@ def build_html(nodes) -> str:
 }})();
 </script>
 
+<script>
+(function () {{
+  // Maps body section anchor IDs to endnote section IDs
+  var sectionToEndnote = {section_to_endnote_js};
+
+  // Build {{ sectionId: {{ number: text }} }} from the endnotes DOM
+  function buildEndnoteMap() {{
+    var map = {{}};
+    var content = document.getElementById('content');
+    var inEndnotes = false, currentSection = null;
+    var children = content.children;
+    for (var i = 0; i < children.length; i++) {{
+      var el = children[i];
+      if (el.id === 'endnotes') {{ inEndnotes = true; continue; }}
+      if (!inEndnotes) continue;
+      if (el.tagName === 'H3' && el.id) {{
+        currentSection = el.id;
+        map[currentSection] = {{}};
+      }} else if (el.tagName === 'P' && currentSection) {{
+        var m = el.textContent.match(/^(\\d+)\\.\\s(.+)$/);
+        if (m) map[currentSection][m[1]] = m[2].trim();
+      }}
+    }}
+    return map;
+  }}
+
+  // Wrap inline endnote refs in body paragraphs
+  function processBody(endnoteMap) {{
+    var content = document.getElementById('content');
+    var children = content.children;
+    var h1Section = null, currentSection = null;
+    // Matches 1-2 digit number immediately after sentence-ending punctuation,
+    // before whitespace or end of string. Avoids &quot; entity boundaries by
+    // not including ; in the char class.
+    var re = /([.,\u2019\u201d")\\]][a-zA-Z]*|[a-zA-Z])(\\d{{1,2}})(?=[\\s.,;:*]|$)/g;
+    for (var i = 0; i < children.length; i++) {{
+      var el = children[i];
+      if (el.id === 'endnotes') break;
+      if (el.tagName === 'H1') {{
+        h1Section = sectionToEndnote[el.id] || null;
+        currentSection = h1Section;
+      }} else if (el.tagName === 'H2') {{
+        currentSection = sectionToEndnote[el.id] || h1Section;
+      }}
+      if (el.tagName !== 'P' || !currentSection) continue;
+      var smap = endnoteMap[currentSection];
+      if (!smap) continue;
+      el.innerHTML = el.innerHTML.replace(re, function (match, punct, num) {{
+        var text = smap[num];
+        if (!text) return match;
+        return punct + '<sup class="endref" data-note="' + text.replace(/"/g, '&quot;') + '">' + num + '</sup>';
+      }});
+    }}
+  }}
+
+  // Floating popover
+  var popover = document.createElement('div');
+  popover.id = 'endnote-popover';
+  document.body.appendChild(popover);
+
+  function showPopover(ref) {{
+    popover.textContent = ref.dataset.note;
+    popover.style.display = 'block';
+    var rect = ref.getBoundingClientRect();
+    var ph = popover.offsetHeight, pw = popover.offsetWidth;
+    var top = rect.top - ph - 8;
+    if (top < 8) top = rect.bottom + 8;
+    var left = rect.left + rect.width / 2 - pw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    popover.style.top = top + 'px';
+    popover.style.left = left + 'px';
+  }}
+
+  document.addEventListener('mouseover', function (e) {{
+    if (e.target.classList.contains('endref')) showPopover(e.target);
+  }});
+  document.addEventListener('mouseout', function (e) {{
+    if (e.target.classList.contains('endref')) popover.style.display = 'none';
+  }});
+  document.addEventListener('click', function (e) {{
+    if (e.target.classList.contains('endref')) {{
+      if (popover.style.display === 'none') showPopover(e.target);
+      else popover.style.display = 'none';
+      e.stopPropagation();
+    }} else {{
+      popover.style.display = 'none';
+    }}
+  }});
+
+  processBody(buildEndnoteMap());
+}})();
+</script>
+
+<script>
+(function () {{
+  // ── Section permalink copy ──
+  var pill = document.createElement('div');
+  pill.id = 'copy-pill';
+  pill.textContent = 'Link copied';
+  document.body.appendChild(pill);
+  var pillTimer;
+
+  document.getElementById('content').addEventListener('click', function (e) {{
+    var link = e.target.closest('a.permalink');
+    if (!link) return;
+    e.preventDefault();
+    var url = window.location.origin + window.location.pathname + link.getAttribute('href');
+    navigator.clipboard.writeText(url).then(function () {{
+      var rect = document.getElementById('content').getBoundingClientRect();
+      pill.style.left = (rect.left + rect.width / 2) + 'px';
+      clearTimeout(pillTimer);
+      pill.classList.add('show');
+      pillTimer = setTimeout(function () {{ pill.classList.remove('show'); }}, 1800);
+    }});
+  }});
+}})();
+</script>
+
+<script>
+(function () {{
+  // ── Scroll spy ──
+  var tocEl = document.getElementById('toc');
+  var headings = Array.from(document.querySelectorAll('#content h1[id], #content h2[id], #content h3[id]'));
+  var linkMap = {{}};
+  headings.forEach(function (h) {{
+    var a = tocEl.querySelector('a[href="#' + h.id + '"]');
+    if (a) linkMap[h.id] = a;
+  }});
+  var activeId = null;
+
+  function scrollTocTo(link) {{
+    var top = link.offsetTop;
+    var bottom = top + link.offsetHeight;
+    var pad = 48;
+    if (top < tocEl.scrollTop + pad) {{
+      tocEl.scrollTop = top - pad;
+    }} else if (bottom > tocEl.scrollTop + tocEl.clientHeight - pad) {{
+      tocEl.scrollTop = bottom - tocEl.clientHeight + pad;
+    }}
+  }}
+
+  function updateActive() {{
+    var best = null;
+    for (var i = 0; i < headings.length; i++) {{
+      if (headings[i].getBoundingClientRect().top <= 120) {{
+        best = headings[i].id;
+      }} else {{
+        break;
+      }}
+    }}
+    if (best === activeId) return;
+    if (activeId && linkMap[activeId]) linkMap[activeId].classList.remove('active');
+    activeId = best;
+    if (activeId && linkMap[activeId]) {{
+      linkMap[activeId].classList.add('active');
+      scrollTocTo(linkMap[activeId]);
+    }}
+  }}
+
+  window.addEventListener('scroll', updateActive, {{ passive: true }});
+  updateActive();
+
+  // ── Reading position memory ──
+  try {{
+    var saved = localStorage.getItem('nd-scroll');
+    if (saved && !window.location.hash) window.scrollTo(0, parseInt(saved, 10));
+  }} catch (e) {{}}
+
+  var saveTimer;
+  window.addEventListener('scroll', function () {{
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {{
+      try {{ localStorage.setItem('nd-scroll', window.scrollY); }} catch (e) {{}}
+    }}, 200);
+  }}, {{ passive: true }});
+}})();
+</script>
+
 </body>
 </html>
 """
@@ -849,19 +1383,23 @@ def main() -> None:
     raw = result.stdout
     print(f"  {len(raw):,} characters, {raw.count(chr(12))} page breaks")
 
+    print("Preprocessing footnotes…")
+    raw = preprocess_footnotes(raw)
+
     print("Parsing document structure…")
     nodes = list(parse(raw))
 
     headings = [(k, t, a) for k, t, a in nodes if k in ("h1", "h2", "h3")]
     pages = [t for k, t, a in nodes if k == "page"]
     paras = [t for k, t, a in nodes if k == "p"]
+    footnotes = [t for k, t, a in nodes if k == "footnote"]
     print(
         f"  {len(headings)} headings "
         f"({sum(1 for k,_,_ in headings if k=='h1')} h1 / "
         f"{sum(1 for k,_,_ in headings if k=='h2')} h2 / "
         f"{sum(1 for k,_,_ in headings if k=='h3')} h3)"
     )
-    print(f"  {len(pages)} page markers, {len(paras)} paragraphs")
+    print(f"  {len(pages)} page markers, {len(paras)} paragraphs, {len(footnotes)} footnote paragraphs")
 
     print("Rendering HTML…")
     html = build_html(nodes)
