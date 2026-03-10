@@ -13,9 +13,15 @@ educational purposes. This project converts the PDF into a clean, readable web
 page with:
 
 - Sidebar table of contents with three levels of hierarchy (part / section / subsection)
-- Direct anchor links to all 148 headings
+- Direct anchor links to all 174 headings
 - Light and dark themes (respects system preference, toggle in the sidebar)
+- Monospace font toggle
 - Mobile-responsive layout with collapsible TOC
+- Inline endnote popovers (hover or click the numbered references)
+- In-page asterisk footnotes rendered inline, positioned after their anchor paragraph
+- Section permalink copy buttons
+- Reading position memory (restored on next visit)
+- TPF discussion links per section (toggleable)
 - Bitstream Charter serif font, generous line-height
 
 ## Files
@@ -24,8 +30,8 @@ page with:
 |------|-------------|
 | `convert.py` | Extracts text from the PDF and generates the HTML |
 | `negative-dialectics.html` | The generated HTML file (committed for convenience) |
+| `discussion_links.yaml` | Per-section discussion links from The Philosophy Forum |
 | `scripts/deploy.sh` | Rsyncs the HTML to the production server |
-| `content/` | Reading group notes and annotations |
 
 ## Regenerating the HTML
 
