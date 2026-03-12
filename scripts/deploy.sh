@@ -17,9 +17,10 @@ if [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_PATH" ]; then
     exit 1
 fi
 
-# Stage as index.html for deployment
+# Stage files for deployment
 mkdir -p build
 cp negative-dialectics.html build/index.html
+cp assets/favicon.ico build/favicon.ico
 
 echo "🚀 Deploying to $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH"
 rsync -rlDzv --no-owner --no-group --no-times --chmod=D775,F664 build/ ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}
