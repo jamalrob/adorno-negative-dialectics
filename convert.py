@@ -150,10 +150,49 @@ def preprocess_footnotes(raw_text: str) -> str:
                 break
 
         if ast_idx is not None:
-            # New footnote starts here: mark from * to end of content
-            body_lines = content[:ast_idx]
             fn_lines = content[ast_idx:]
-            new_content = body_lines + [FOOTNOTE_MARKER + l for l in fn_lines]
+
+            if footnote_continues:
+                # A footnote continuation from the previous page AND a new footnote
+                # on this page. The last paragraph block before ast_idx is the
+                # continuation; from ast_idx onward is the new footnote.
+                pre_ast = content[:ast_idx]
+                # Skip trailing blanks to find the end of the continuation text
+                j = len(pre_ast) - 1
+                while j >= 0 and not pre_ast[j].strip():
+                    j -= 1
+                # Find the last blank before the continuation block
+                last_blank_pre = None
+                for k in range(j - 1, -1, -1):
+                    if not pre_ast[k].strip():
+                        last_blank_pre = k
+                        break
+                if j >= 0 and last_blank_pre is not None:
+                    fn_cont_candidate = pre_ast[last_blank_pre + 1:j + 1]
+                    fn_cont_content = [
+                        l for l in fn_cont_candidate
+                        if l.strip() and not _is_separator(l.strip())
+                    ]
+                    if fn_cont_content:
+                        body_lines = pre_ast[:last_blank_pre + 1]
+                        new_content = (
+                            body_lines
+                            + [FOOTNOTE_CONT_MARKER + l for l in fn_cont_candidate]
+                            + [FOOTNOTE_MARKER + l for l in fn_lines]
+                        )
+                    else:
+                        new_content = (
+                            pre_ast
+                            + [FOOTNOTE_MARKER + l for l in fn_lines]
+                        )
+                else:
+                    new_content = (
+                        content[:ast_idx]
+                        + [FOOTNOTE_MARKER + l for l in fn_lines]
+                    )
+            else:
+                # New footnote starts here: mark from * to end of content
+                new_content = content[:ast_idx] + [FOOTNOTE_MARKER + l for l in fn_lines]
 
             # Check if footnote continues to next page
             last_fn = next(
@@ -164,23 +203,53 @@ def preprocess_footnotes(raw_text: str) -> str:
             footnote_continues = not ends_cleanly_unicode(last_fn.rstrip())
 
         elif footnote_continues:
-            # Continuation page: the last paragraph block before the page number
-            # is the footnote continuation.
-            last_blank = None
-            for j in range(len(content) - 1, -1, -1):
-                if not content[j].strip():
-                    last_blank = j
-                    break
+            # Continuation page: scan backward collecting paragraph blocks
+            # whose last non-separator line ends cleanly (terminal punctuation).
+            # Stop when a block ends mid-sentence — that's body text, not a
+            # footnote continuation.  This handles 0-indent continuations that
+            # the old MIN_FN_INDENT heuristic missed.
 
-            if last_blank is not None:
-                fn_candidate = content[last_blank + 1:]
+            j = len(content) - 1
+            while j >= 0 and not content[j].strip():
+                j -= 1
+
+            fn_start_idx = None
+            while j >= 0:
+                block_end = j
+                while j >= 0 and content[j].strip():
+                    j -= 1
+                block_start = j + 1
+                if block_start > block_end:
+                    break
+                # Find last non-separator line in this block
+                last_line = next(
+                    (content[k] for k in range(block_end, block_start - 1, -1)
+                     if content[k].strip() and not _is_separator(content[k].strip())),
+                    ''
+                )
+                if ends_cleanly_unicode(last_line.rstrip()):
+                    fn_start_idx = block_start
+                    while j >= 0 and not content[j].strip():
+                        j -= 1
+                else:
+                    break  # mid-sentence → body text, stop here
+
+            # Fallback: use last blank if no indented blocks found
+            if fn_start_idx is None:
+                for j2 in range(len(content) - 1, -1, -1):
+                    if not content[j2].strip():
+                        fn_start_idx = j2 + 1
+                        break
+
+            if fn_start_idx is not None and fn_start_idx < len(content):
+                fn_candidate = content[fn_start_idx:]
                 fn_content = [
                     l for l in fn_candidate
                     if l.strip() and not _is_separator(l.strip())
                 ]
                 if fn_content:
                     new_content = (
-                        content[:last_blank + 1]
+                        content[:fn_start_idx]
                         + [FOOTNOTE_CONT_MARKER + l for l in fn_candidate]
                     )
                     last_fn = fn_content[-1]
@@ -228,7 +297,7 @@ def is_all_caps_heading(s: str) -> bool:
         return False
     core = strip_decorative(stripped)
     core = re.sub(r"\s+", " ", core).strip()
-    if len(core) < 6 or len(stripped) > 100:
+    if (len(core) < 6 and len(stripped) < 6) or len(stripped) > 100:
         return False
     allowed = set(" ,':.-/\u2013\u2014")
     return all(c.isupper() or c in allowed for c in core) and any(
@@ -337,7 +406,9 @@ def parse(raw: str):
     para: list[str] = []
     fn_para: list[str] = []
     in_footnote = False
-    fn_is_cont = False  # True if current footnote block is a page continuation
+    fn_is_cont = False    # True if current block is a cross-page continuation
+    fn_in_multipara = False  # True after an intra-footnote paragraph break
+    fn_marker = '*'       # Symbol that started the current/most-recent footnote
 
     def flush():
         nonlocal para
@@ -348,8 +419,8 @@ def parse(raw: str):
     def flush_fn():
         nonlocal fn_para, fn_is_cont
         if fn_para:
-            kind = "footnote_cont" if fn_is_cont else "footnote"
-            yield (kind, " ".join(fn_para), None)
+            kind = "footnote_cont" if (fn_is_cont or fn_in_multipara) else "footnote"
+            yield (kind, " ".join(fn_para), fn_marker)
             fn_para = []
 
     # Suppress everything before the first real h1 heading (title page + TOC)
@@ -374,7 +445,13 @@ def parse(raw: str):
         # ── blanks ──
         if not s:
             if in_footnote and (is_fn_line or is_fn_cont_line):
-                # Blank line within footnote section — PDF layout artifact, skip it
+                # Blank line within footnote section: either a layout artifact or a
+                # real paragraph break. Distinguish by checking terminal punctuation.
+                if fn_para and ends_cleanly_unicode(fn_para[-1]):
+                    # Real paragraph break — flush current para, stay in footnote
+                    yield from flush_fn()
+                    fn_in_multipara = True
+                # else: layout artifact — skip silently
                 continue
             if in_footnote:
                 yield from flush_fn()
@@ -387,16 +464,30 @@ def parse(raw: str):
         if re.search(r"\.{5,}", s) or re.match(r"^[_\-]{3,}$", s):
             continue
 
-        # ── new footnote lines (start with *) ──
+        # ── new footnote lines (start with * or †/‡ dagger symbols) ──
         if is_fn_line:
             if preamble:
                 continue
+            is_new_fn_symbol = s.startswith(('*', '†', '‡'))
             if not in_footnote:
                 yield from flush()
                 in_footnote = True
                 fn_is_cont = False
-            # Strip the leading * and whitespace from the first line
-            text = s.lstrip("* ") if s.startswith("*") else s
+                fn_in_multipara = False
+                if is_new_fn_symbol:
+                    fn_marker = s[0]
+            elif fn_is_cont or (is_new_fn_symbol and (fn_para or fn_in_multipara)):
+                # Transitioning from a continuation block to a new footnote, or a new
+                # dagger footnote starting after the current one — flush first.
+                # fn_in_multipara covers the case where fn_para was just cleared by a
+                # paragraph-break flush but we haven't accumulated new text yet.
+                yield from flush_fn()
+                fn_is_cont = False
+                fn_in_multipara = False
+                if is_new_fn_symbol:
+                    fn_marker = s[0]
+            # Strip the leading footnote symbol and whitespace from the first line
+            text = re.sub(r'^[*†‡]\s*', '', s) if is_new_fn_symbol else s
             if text:
                 fn_para.append(text)
             continue
@@ -418,6 +509,7 @@ def parse(raw: str):
             yield from flush_fn()
             in_footnote = False
             fn_is_cont = False
+            fn_in_multipara = False
 
         # ── known h1 ──
         if s == "Index":
@@ -732,7 +824,7 @@ p {
   hyphens: auto;
 }
 .inline-footnote p:first-child::before {
-  content: "* ";
+  content: attr(data-marker, "* ");
   font-weight: 700;
 }
 .inline-footnote p:last-child { margin-bottom: 0; }
@@ -789,8 +881,7 @@ sup.endref:hover { text-decoration: underline; }
 #endnote-popover {
   position: fixed;
   display: none;
-  max-width: 320px;
-  padding: 0.6rem 0.8rem;
+  max-width: 340px;
   background: var(--toc-bg);
   border: 1px solid var(--toc-border);
   border-radius: 4px;
@@ -799,9 +890,27 @@ sup.endref:hover { text-decoration: underline; }
   line-height: 1.5;
   color: var(--text);
   z-index: 1000;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
 }
+.endnote-popover-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--toc-border);
+}
+.endnote-popover-btn {
+  background: none;
+  border: 1px solid var(--toc-border);
+  border-radius: 3px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  font-family: system-ui, sans-serif;
+}
+.endnote-popover-btn:hover { background: var(--toc-border); }
+.endnote-popover-text { padding: 0.5rem 0.8rem; }
 
 /* ── Mobile ── */
 #toc-toggle {
@@ -917,28 +1026,32 @@ def _consolidate_footnotes(nodes: list) -> list:
     current = None
     last_was_fn = False
 
-    def _find_anchor() -> int:
-        """Return index of the most recent body paragraph containing '*'."""
+    def _find_anchor(marker='*') -> int:
+        """Return index of the most recent body paragraph containing the marker symbol."""
         for i in range(len(body_nodes) - 1, -1, -1):
             bk, bt, _ = body_nodes[i]
-            if bk == "p" and "*" in bt:
+            if bk == "p" and marker in bt:
                 return i
         return len(body_nodes) - 1
 
     for kind, text, anchor in nodes:
         if kind in ("footnote", "footnote_cont"):
-            if kind == "footnote" and not last_was_fn:
-                # New footnote group anchored to the paragraph with the * marker
+            if kind == "footnote":
+                # Each new * footnote (or split † footnote) always starts a new
+                # aside group, even when consecutive with no body node between.
                 if current is not None:
                     groups.append(current)
-                current = {"insert_after": _find_anchor(), "paras": [text]}
+                marker = anchor or '*'
+                current = {"insert_after": _find_anchor(marker), "paras": [text],
+                           "marker": marker}
             elif current is not None:
-                # Same group: either consecutive footnote paragraphs (blank line
-                # within footnote) or a continuation from the next page.
+                # footnote_cont: append continuation to the current group.
                 current["paras"].append(text)
             else:
                 # Orphan continuation with no prior group — start a new one
-                current = {"insert_after": len(body_nodes) - 1, "paras": [text]}
+                marker = anchor or '*'
+                current = {"insert_after": len(body_nodes) - 1, "paras": [text],
+                           "marker": marker}
             last_was_fn = True
         else:
             last_was_fn = False
@@ -949,21 +1062,28 @@ def _consolidate_footnotes(nodes: list) -> list:
 
     # If the anchor paragraph ends mid-sentence (page-break split), defer the
     # footnote to the next cleanly-ending paragraph so it doesn't interrupt a sentence.
+    # Never cross a section heading boundary.
     for group in groups:
         i = group["insert_after"]
         while i < len(body_nodes) - 1:
             bk, bt, _ = body_nodes[i]
             if bk == "p" and not ends_cleanly_unicode(bt):
+                if body_nodes[i + 1][0] in ("h1", "h2", "h3"):
+                    break  # don't advance past a section heading
                 i += 1
             else:
                 break
         group["insert_after"] = i
 
-    # Insert footnote asides into body_nodes from last to first to preserve indices
+    # Insert footnote asides into body_nodes from last to first to preserve indices.
+    # Secondary sort key (also reversed) ensures groups at the same position are
+    # inserted in reverse original order, so they end up in original order in the output.
     result = list(body_nodes)
-    for group in sorted(groups, key=lambda g: g["insert_after"], reverse=True):
+    for i, group in enumerate(groups):
+        group["_idx"] = i
+    for group in sorted(groups, key=lambda g: (g["insert_after"], g["_idx"]), reverse=True):
         pos = group["insert_after"] + 1
-        result.insert(pos, ("footnote_block", group["paras"], None))
+        result.insert(pos, ("footnote_block", group["paras"], group.get("marker", "*")))
 
     return result
 
@@ -1015,8 +1135,15 @@ def build_html(nodes) -> str:
         if kind == "page":
             pass
         elif kind == "footnote_block":
-            # text is a list of paragraph strings
-            ps = "\n".join(f"<p>{escape(p, quote=False)}</p>" for p in text)
+            # text is a list of paragraph strings; anchor holds the footnote marker symbol
+            marker = anchor or '*'
+            paras_html = []
+            for i, p in enumerate(text):
+                if i == 0:
+                    paras_html.append(f'<p data-marker="{escape(marker)} ">{escape(p, quote=False)}</p>')
+                else:
+                    paras_html.append(f'<p>{escape(p, quote=False)}</p>')
+            ps = "\n".join(paras_html)
             body_parts.append(f'<aside class="inline-footnote">\n{ps}\n</aside>\n')
         elif kind in ("h1", "h2", "h3"):
             past_title = True
@@ -1217,9 +1344,8 @@ def build_html(nodes) -> str:
     var children = content.children;
     var h1Section = null, currentSection = null;
     // Matches 1-2 digit number immediately after sentence-ending punctuation,
-    // before whitespace or end of string. Avoids &quot; entity boundaries by
-    // not including ; in the char class.
-    var re = /([.,\u2019\u201d")\\]][a-zA-Z]*|[a-zA-Z])(\\d{{1,2}})(?=[\\s.,;:*]|$)/g;
+    // before whitespace or end of string.
+    var re = /([.,;\u2019\u201d")\\]][a-zA-Z]*|[a-zA-Z])(\\d{{1,2}})(?=[\\s.,;:*]|$)/g;
     for (var i = 0; i < children.length; i++) {{
       var el = children[i];
       if (el.id === 'endnotes') break;
@@ -1244,10 +1370,9 @@ def build_html(nodes) -> str:
   var popover = document.createElement('div');
   popover.id = 'endnote-popover';
   document.body.appendChild(popover);
+  var activeRef = null;
 
-  function showPopover(ref) {{
-    popover.textContent = ref.dataset.note;
-    popover.style.display = 'block';
+  function positionPopover(ref) {{
     var rect = ref.getBoundingClientRect();
     var ph = popover.offsetHeight, pw = popover.offsetWidth;
     var top = rect.top - ph - 8;
@@ -1258,20 +1383,68 @@ def build_html(nodes) -> str:
     popover.style.left = left + 'px';
   }}
 
-  document.addEventListener('mouseover', function (e) {{
-    if (e.target.classList.contains('endref')) showPopover(e.target);
-  }});
-  document.addEventListener('mouseout', function (e) {{
-    if (e.target.classList.contains('endref')) popover.style.display = 'none';
-  }});
+  function hidePopover() {{
+    popover.style.display = 'none';
+    activeRef = null;
+  }}
+
+  function showPopover(ref) {{
+    activeRef = ref;
+    var noteText = ref.dataset.note;
+    popover.innerHTML = '';
+
+    var toolbar = document.createElement('div');
+    toolbar.className = 'endnote-popover-toolbar';
+
+    var copyBtn = document.createElement('button');
+    copyBtn.className = 'endnote-popover-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.title = 'Copy note text';
+    copyBtn.addEventListener('click', function (e) {{
+      e.stopPropagation();
+      navigator.clipboard.writeText(noteText).then(function () {{
+        copyBtn.textContent = 'Copied!';
+        setTimeout(function () {{ copyBtn.textContent = 'Copy'; }}, 1500);
+      }});
+    }});
+
+    var closeBtn = document.createElement('button');
+    closeBtn.className = 'endnote-popover-btn';
+    closeBtn.textContent = '\u00d7';
+    closeBtn.title = 'Close (Esc)';
+    closeBtn.addEventListener('click', function (e) {{
+      e.stopPropagation();
+      hidePopover();
+    }});
+
+    toolbar.appendChild(copyBtn);
+    toolbar.appendChild(closeBtn);
+
+    var textDiv = document.createElement('div');
+    textDiv.className = 'endnote-popover-text';
+    textDiv.textContent = noteText;
+
+    popover.appendChild(toolbar);
+    popover.appendChild(textDiv);
+    popover.style.display = 'block';
+    positionPopover(ref);
+  }}
+
   document.addEventListener('click', function (e) {{
     if (e.target.classList.contains('endref')) {{
-      if (popover.style.display === 'none') showPopover(e.target);
-      else popover.style.display = 'none';
+      if (activeRef === e.target && popover.style.display !== 'none') {{
+        hidePopover();
+      }} else {{
+        showPopover(e.target);
+      }}
       e.stopPropagation();
-    }} else {{
-      popover.style.display = 'none';
+    }} else if (!popover.contains(e.target)) {{
+      hidePopover();
     }}
+  }});
+
+  document.addEventListener('keydown', function (e) {{
+    if (e.key === 'Escape') hidePopover();
   }});
 
   processBody(buildEndnoteMap());
