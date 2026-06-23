@@ -221,6 +221,11 @@ def preprocess_footnotes(raw_text: str) -> str:
                 block_start = j + 1
                 if block_start > block_end:
                     break
+                # If the block's first line is indented it's a new body paragraph
+                # (book typography: first line of each paragraph is indented).
+                # Footnote continuation lines are always flush left (col 0).
+                if content[block_start].startswith(' '):
+                    break
                 # Find last non-separator line in this block
                 last_line = next(
                     (content[k] for k in range(block_end, block_start - 1, -1)
@@ -1088,6 +1093,12 @@ def _consolidate_footnotes(nodes: list) -> list:
     return result
 
 
+def _body_para_ends_cleanly(text: str) -> bool:
+    """Like ends_cleanly_unicode but strips trailing endnote reference digits first.
+    Prevents paragraphs ending with "...claim.1" from being treated as mid-sentence."""
+    return ends_cleanly_unicode(re.sub(r'\d+$', '', text.rstrip()))
+
+
 def _merge_split_paragraphs(nodes: list) -> list:
     """Merge consecutive p nodes where the first ends mid-sentence (page-break artifact).
     Also merges split paragraphs within footnote_block nodes."""
@@ -1103,7 +1114,7 @@ def _merge_split_paragraphs(nodes: list) -> list:
                     merged.append(para)
             result.append(("footnote_block", merged, anchor))
         elif (result and result[-1][0] == "p" and kind == "p"
-                and not ends_cleanly_unicode(result[-1][1])):
+                and not _body_para_ends_cleanly(result[-1][1])):
             pk, pt, pa = result.pop()
             result.append(("p", pt + " " + text, pa))
         else:

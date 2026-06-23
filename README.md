@@ -31,6 +31,7 @@ page with:
 | `convert.py` | Extracts text from the PDF and generates the HTML |
 | `negative-dialectics.html` | The generated HTML file (committed for convenience) |
 | `discussion_links.yaml` | Per-section discussion links from The Philosophy Forum |
+| `Makefile` | `make build` runs convert.py; `make deploy` builds then deploys |
 | `scripts/deploy.sh` | Rsyncs the HTML to the production server |
 
 ## Regenerating the HTML
@@ -46,7 +47,8 @@ adorno-theodor-negative-dialectics-2019-dennis-redmond-translation.pdf
 Then run:
 
 ```bash
-python3 convert.py
+make build
+# or directly: python3 convert.py
 ```
 
 ## Credits
